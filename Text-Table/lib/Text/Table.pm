@@ -842,7 +842,7 @@ sub body_rule {
 
 sub multiline_ansi {
     my ($text) = @_;
-    return $text unless $text =~ /\033\[[\d;]*m/; # No ANSI codes
+    return $text unless $text =~ /\033\[[0-9;]*m/; # No ANSI codes
     
     my @lines = split /\n/, $text, -1;
     return $text if @lines <= 1; # Single line

@@ -10,6 +10,8 @@ use List::Util qw(sum max);
 
 use Text::Aligner qw(align);
 
+use Term::ANSIColor qw(uncolor color);
+
 use overload (
     # Don't stringify when only doing boolean tests, since stringification can
     # be expensive for large tables:
@@ -38,11 +40,10 @@ sub _is_sep {
 sub _get_sep_title_body
 {
     my $sep = shift;
-
     return
         +( ref($sep) eq 'HASH' )
         ? @{ $sep }{qw(title body)}
-        : split( /\n/, ${$sep}, -1 ) ;
+        : split( /\n/, multiline_ansi(${$sep}), -1 );
 }
 
 sub _parse_sep {
@@ -127,7 +128,7 @@ sub _parse_spec {
         }
         elsif (ref($x) ne 'ARRAY')
         {
-            $x = [ split /\n/, $x, -1];
+			$x = [ split /\n/, multiline_ansi($x), -1];
         }
     }
 
@@ -412,11 +413,12 @@ sub add {
     }
 
     foreach my $row (
-        _transpose(
-            [
-                map { [ defined() ? split( /\n/ ) : '' ] } @_
-            ]
-        )
+        _transpose([
+			map { 
+				my $processed = multiline_ansi($_);
+				[ defined($processed) ? split( /\n/, $processed ) : '' ] 
+			} @_
+        ])
     )
     {
         $tb->_add(@$row);
@@ -837,6 +839,85 @@ sub body_rule {
     my $tb = shift;
     return $tb->_rule( 1, @_);
 }
+
+sub multiline_ansi {
+    my ($text) = @_;
+    return $text unless $text =~ /\033\[[\d;]*m/; # No ANSI codes
+    
+    my @lines = split /\n/, $text, -1;
+    return $text if @lines <= 1; # Single line
+    
+    # Track the current color state
+    my %current_attrs = (
+        fg => undef,        # foreground color (can be standard, 256, or truecolor)
+        bg => undef,        # background color  
+        bold => 0,          # bold attribute
+        underline => 0,     # underline attribute
+        # Add other attributes as needed
+    );
+    
+    for my $i (0..$#lines) {
+        my $line = $lines[$i];
+        my $line_has_ansi = ($line =~ /\033\[[\d;]*m/);
+        
+        # Process each ANSI sequence in this line
+        while ($line =~ /(\033\[[\d;]*m)/g) {
+            my @attrs = uncolor($1);
+            
+            foreach my $attr (@attrs) {
+                if ($attr eq 'clear' || $attr eq 'reset') {
+                    # Reset everything
+                    %current_attrs = (fg => undef, bg => undef, bold => 0, underline => 0);
+                } elsif ($attr eq 'bold') {
+                    $current_attrs{bold} = 1;
+                } elsif ($attr eq 'underline') {
+                    $current_attrs{underline} = 1;
+                } elsif ($attr =~ /^on_(.+)/) {
+                    # Background color (including on_r#g#b# format)
+                    $current_attrs{bg} = $1;
+                } elsif ($attr =~ /^r\d+g\d+b\d+$/) {
+                    # True color foreground (r#g#b# format)
+                    $current_attrs{fg} = $attr;
+                } elsif ($attr =~ /^(black|red|green|yellow|blue|magenta|cyan|white|bright_.+|grey\d+|ansi\d+)$/) {
+                    # Standard colors, bright colors, 256-colors
+                    $current_attrs{fg} = $attr;
+                }
+                # Add more attribute handling as needed
+            }
+        }
+        
+        # Add reset to end of line if it has ANSI and doesn't end with reset
+        if ($line_has_ansi && $line !~ /\033\[0m$/) {
+            $lines[$i] .= "\033[0m";
+        }
+        
+        # Continue attributes to next line 
+        if ($i < $#lines) {
+            my @continue_attrs = ();
+            
+            # Add foreground color
+            if ($current_attrs{fg}) {
+                push @continue_attrs, $current_attrs{fg};
+            }
+            
+            # Add background color  
+            if ($current_attrs{bg}) {
+                push @continue_attrs, "on_$current_attrs{bg}";
+            }
+            
+            # Add other attributes
+            push @continue_attrs, 'bold' if $current_attrs{bold};
+            push @continue_attrs, 'underline' if $current_attrs{underline};
+            
+            if (@continue_attrs) {
+                $lines[$i+1] = color(@continue_attrs) . $lines[$i+1];
+            }
+        }
+    }
+    
+    return join("\n", @lines);
+}
+
 
 ### warning behavior
 use Carp;
